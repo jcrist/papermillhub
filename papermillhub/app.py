@@ -7,6 +7,7 @@ from urllib.parse import urlparse, urlunparse
 
 from jupyterhub.services.auth import HubAuthenticated
 from tornado import web
+from tornado.httpclient import AsyncHTTPClient, HTTPRequest, HTTPError
 from tornado.log import LogFormatter
 from tornado.gen import IOLoop
 from traitlets import Unicode, Bool, validate, default
@@ -232,18 +233,23 @@ class JobsHandler(APIHandler):
         if job_id:
             raise web.HTTPError(405)
 
-        data = self.json_data
-        in_path = self.get_or_raise(data, "in_path")
-        out_path = self.get_or_raise(data, "out_path")
-        parameters = data.get("parameters", {})
-        kernel_name = data.get("kernel_name", "")
+        user = self.get_current_user()
 
-        job_id = await self.papermill.schedule(
-            in_path,
-            out_path,
-            parameters=parameters,
-            kernel_name=kernel_name
+        base_url = 'http://localhost:8000' + os.environ.get('JUPYTERHUB_BASE_URL', '')
+        user_path = f'user/{user["name"]}/'
+        papermillhub_endpoint = 'papermillhub/'
+        url = base_url + user_path + papermillhub_endpoint
+
+        req = HTTPRequest(
+            url,
+            'POST',
+            headers={ 'Authorization': f'token {self.hub_auth.api_token}' },
+            body=str(self.json_data)
         )
+        try:
+            resp = await AsyncHTTPClient().fetch(req)
+        except:
+            pass
         self.write({"job_id": job_id})
 
     @web.authenticated

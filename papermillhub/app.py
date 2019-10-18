@@ -6,13 +6,16 @@ import signal
 from urllib.parse import urlparse, urlunparse
 
 from jupyterhub.services.auth import HubAuthenticated
+from notebook.utils import url_path_join
 from tornado import web
+from tornado.httpclient import AsyncHTTPClient, HTTPRequest
 from tornado.log import LogFormatter
 from tornado.gen import IOLoop
 from traitlets import Unicode, Bool, validate, default
 from traitlets.config import Application, catch_config_error
 
 from . import __version__ as VERSION
+from .launcher import Launcher
 from .objects import DataManager
 from .utils import TaskPool, get_ip
 
@@ -50,10 +53,7 @@ class PapermillHub(Application):
         "papermillhub_config.py", help="The config file to load", config=True
     )
 
-    base_url = Unicode(
-        help="The application's base URL",
-        config=True,
-    )
+    base_url = Unicode(help="The application's base URL", config=True)
 
     @default("base_url")
     def _default_base_url(self):
@@ -72,6 +72,15 @@ class PapermillHub(Application):
         # Ensure no trailing slash
         url = urlunparse(parsed._replace(path=parsed.path.rstrip("/")))
         return url
+
+    # TODO: figure out how to make this unnecessary. In a perfect world,
+    # this information should be available from the hub when it spawns this
+    # process, but here we are.
+    proxy_url = Unicode(help="JupyterHub's public facing proxy URL", config=True)
+
+    @default("proxy_url")
+    def _default_proxy_url(self):
+        return "http://127.0.0.1:8000"
 
     db_url = Unicode(
         "sqlite:///:memory:",
@@ -125,9 +134,7 @@ class PapermillHub(Application):
     def init_tornado_application(self):
         self.handlers = list(default_handlers)
         self.tornado_application = web.Application(
-            self.handlers,
-            log=self.log,
-            papermill=self,
+            self.handlers, log=self.log, papermill=self
         )
 
     async def start_async(self):
@@ -139,8 +146,7 @@ class PapermillHub(Application):
             await self.start_async()
         except Exception:
             self.log.critical(
-                "Failed to start papermillhub, shutting down",
-                exc_info=True
+                "Failed to start papermillhub, shutting down", exc_info=True
             )
             await self.stop_async(stop_event_loop=False)
             self.exit(1)
@@ -232,18 +238,23 @@ class JobsHandler(APIHandler):
         if job_id:
             raise web.HTTPError(405)
 
-        data = self.json_data
-        in_path = self.get_or_raise(data, "in_path")
-        out_path = self.get_or_raise(data, "out_path")
-        parameters = data.get("parameters", {})
-        kernel_name = data.get("kernel_name", "")
+        user = self.get_current_user()
 
-        job_id = await self.papermill.schedule(
-            in_path,
-            out_path,
-            parameters=parameters,
-            kernel_name=kernel_name
+        launcher = Launcher(user, self.hub_auth.api_token)
+        server = await launcher.launch()
+        self.log.info(f"Launched user {server['url']}")
+
+        base_url = self.papermill.proxy_url
+        url = url_path_join(base_url, server["url"], "papermillhub/")
+        req = HTTPRequest(
+            url,
+            "POST",
+            headers={"Authorization": f"token {self.hub_auth.api_token}"},
+            body=str(self.json_data),
         )
+        resp = await AsyncHTTPClient().fetch(req)
+        job_id = json.loads(resp.body)["job_id"]
+
         self.write({"job_id": job_id})
 
     @web.authenticated
@@ -269,7 +280,7 @@ class JobsHandler(APIHandler):
         self.set_status(204)
 
 
-prefix = os.environ.get('JUPYTERHUB_SERVICE_PREFIX', '/')
+prefix = os.environ.get("JUPYTERHUB_SERVICE_PREFIX", "/")
 default_handlers = [(prefix + "api/jobs/([a-zA-Z0-9-_.]*)", JobsHandler)]
 
 main = PapermillHub.launch_instance

@@ -14,6 +14,7 @@ from traitlets import Unicode, Bool, validate, default
 from traitlets.config import Application, catch_config_error
 
 from . import __version__ as VERSION
+from .launcher import Launcher
 from .objects import DataManager
 from .utils import TaskPool, get_ip
 
@@ -93,6 +94,7 @@ class PapermillHub(Application):
     @catch_config_error
     def initialize(self, argv=None):
         super().initialize(argv)
+        self.log.info(str(os.environ))
         if self.subapp is not None:
             return
         self.load_config_file(self.config_file)
@@ -239,6 +241,10 @@ class JobsHandler(APIHandler):
         user_path = f'user/{user["name"]}/'
         papermillhub_endpoint = 'papermillhub/'
         url = base_url + user_path + papermillhub_endpoint
+
+        launcher = Launcher(user, self.hub_auth.api_token)
+        server = await launcher.launch()
+        self.log.info(f"Launched {str(server)}")
 
         req = HTTPRequest(
             url,

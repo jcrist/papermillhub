@@ -1,13 +1,9 @@
 """
-Launch an image with a temporary user via JupyterHub
+Launch a user server via JupyterHub
 
-This file has been vendored from the Python package binderhub. It has been
-vendored rather than imported because binderhub has many other dependencies not
-needed by this hub service.
+This file has been modified from the Python package binderhub.
 """
-import base64
 import json
-import uuid
 import os
 
 from tornado.log import app_log
@@ -48,7 +44,9 @@ class Launcher:
                 # e.g. 502,504 due to ingress issues or Hub relocating,
                 # 599 due to connection issues such as Hub restarting
                 if e.code >= 500:
-                    app_log.debug("Error accessing Hub API (using %s): %s", request_url, e)
+                    app_log.debug(
+                        "Error accessing Hub API (using %s): %s", request_url, e
+                    )
                     if i == self.retries:
                         # last api request failed, raise the exception
                         raise
@@ -64,26 +62,27 @@ class Launcher:
         return body
 
     async def launch(self):
-        """Launch a server for a given image
+        """
+        Launch the user server. At the moment, this just launches the default
+        server, with the default args. In the future, we should allow for
+        launching named servers with custom spawner args (e.g., custom image
+        ids).
         """
 
         username = self.user["name"]
-        # # test if exists and early exit if so
+        # Test if exists and early exit if so
         user_data = await self.get_user_data()
+        # The default server is available under the empty string key ""
         started_server = user_data["servers"].get("", None)
         if started_server and started_server["ready"]:
             redirect_url = started_server["url"]
             return {"status": "running", "url": redirect_url}
 
         # start server
-        app_log.debug(
-            "Starting server %s for user %s", username
-        )
+        app_log.debug("Starting server %s for user %s", username)
         try:
             resp = await self.api_request(
-                "users/{}/server".format(username),
-                method="POST",
-                body="{}",
+                "users/{}/server".format(username), method="POST", body="{}"
             )
 
             if resp.code == 202:
@@ -105,8 +104,8 @@ class Launcher:
                         raise web.HTTPError(
                             500,
                             (
-                                "Image %s for user %s failed to launch"
-                                % (image, username)
+                                "Server for user %s failed to launch"
+                                % (username)
                             ),
                         )
                     # FIXME: make this configurable
@@ -115,11 +114,7 @@ class Launcher:
                     await gen.sleep(min(1.4 ** i, 10))
                 else:
                     raise web.HTTPError(
-                        500,
-                        (
-                            "Server for user %s took too long to launch"
-                            % (username)
-                        ),
+                        500, ("Server for user %s took too long to launch" % (username))
                     )
 
         except HTTPError as e:
@@ -129,9 +124,7 @@ class Launcher:
                 body = ""
 
             self.log.error(
-                "Error starting server for user {}: {}\n{}".format(
-                    username, e, body
-                )
+                "Error starting server for user {}: {}\n{}".format(username, e, body)
             )
             raise web.HTTPError(500, "Failed to launch server")
 
